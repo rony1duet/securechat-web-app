@@ -1,0 +1,5 @@
+{
+  "name": "SecureChat",
+  "description": "A real-time chat application with a modern UI, built with React, Tailwind CSS, and Firebase.",
+  "requestFramePermissions": ["camera", "microphone"]
+}

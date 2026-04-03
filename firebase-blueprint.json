@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the chat application.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The user's unique ID." },
+        "displayName": { "type": "string", "description": "The user's display name." },
+        "email": { "type": "string", "format": "email", "description": "The user's email address." },
+        "photoURL": { "type": "string", "format": "uri", "description": "URL to the user's profile picture." },
+        "lastSeen": { "type": "string", "format": "date-time", "description": "Timestamp of the user's last activity." },
+        "status": { "type": "string", "enum": ["online", "offline"], "description": "Current online status." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the user account was created." }
+      },
+      "required": ["uid", "displayName", "email", "createdAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A conversation between two or more users.",
+      "type": "object",
+      "properties": {
+        "participants": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "List of user UIDs participating in the chat."
+        },
+        "lastMessage": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" },
+            "senderId": { "type": "string" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          },
+          "description": "The most recent message sent in this chat."
+        },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "When the chat was last updated." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the chat was created." }
+      },
+      "required": ["participants", "updatedAt", "createdAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A single message within a chat.",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "description": "The message content." },
+        "senderId": { "type": "string", "description": "The UID of the user who sent the message." },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the message was sent." }
+      },
+      "required": ["text", "senderId", "timestamp"]
+    },
+    "TypingStatus": {
+      "title": "TypingStatus",
+      "description": "Indicates if a user is currently typing in a chat.",
+      "type": "object",
+      "properties": {
+        "isTyping": { "type": "boolean", "description": "Whether the user is typing." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "When the status was last updated." }
+      },
+      "required": ["isTyping", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user profiles."
+    },
+    "chats/{chatId}": {
+      "schema": { "$ref": "#/entities/Chat" },
+      "description": "Stores chat sessions."
+    },
+    "chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Stores messages within a specific chat."
+    },
+    "chats/{chatId}/typing/{userId}": {
+      "schema": { "$ref": "#/entities/TypingStatus" },
+      "description": "Stores typing status for users in a chat."
+    }
+  }
+}

@@ -1,0 +1,176 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+    
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+    
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    
+    function isValidUser(data) {
+      return hasRequiredFields(['uid', 'displayName', 'email', 'createdAt']) &&
+             data.uid == request.auth.uid &&
+             data.displayName is string && data.displayName.size() > 0 && data.displayName.size() <= 100 &&
+             data.email is string && isValidEmail(data.email) &&
+             data.createdAt is timestamp &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 2000)) &&
+             (!('lastSeen' in data) || data.lastSeen is timestamp) &&
+             (!('status' in data) || (data.status is string && (data.status == 'online' || data.status == 'offline'))) &&
+             (!('displayNameLower' in data) || (data.displayNameLower is string && data.displayNameLower.size() <= 100)) &&
+             (!('emailLower' in data) || (data.emailLower is string && data.emailLower.size() <= 100)) &&
+             (!('showOnlineStatus' in data) || data.showOnlineStatus is bool);
+    }
+    
+    function isValidChat(data) {
+      return hasRequiredFields(['participants', 'updatedAt', 'createdAt']) &&
+             data.participants is list && data.participants.size() >= 2 && data.participants.size() <= 50 &&
+             request.auth.uid in data.participants &&
+             data.updatedAt is timestamp &&
+             data.createdAt is timestamp &&
+             (!('lastMessageId' in data) || data.lastMessageId is string) &&
+             (!('lastMessage' in data) || (
+               data.lastMessage is map &&
+               'text' in data.lastMessage && data.lastMessage.text is string &&
+               'senderId' in data.lastMessage && data.lastMessage.senderId is string &&
+               'timestamp' in data.lastMessage && data.lastMessage.timestamp is timestamp &&
+               (!('status' in data.lastMessage) || (data.lastMessage.status is string && (data.lastMessage.status == 'sent' || data.lastMessage.status == 'delivered' || data.lastMessage.status == 'seen')))
+             ));
+    }
+    
+    function isValidMessage(data) {
+      return hasRequiredFields(['senderId', 'timestamp']) &&
+             (
+               ('text' in data && data.text is string && data.text.size() > 0 && data.text.size() <= 4000) ||
+               ('imageUrl' in data && data.imageUrl is string && data.imageUrl.size() <= 1048576)
+             ) &&
+             (!('text' in data) || (data.text is string && data.text.size() <= 4000)) &&
+             (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1048576)) &&
+             data.senderId == request.auth.uid &&
+             data.timestamp is timestamp &&
+             (!('status' in data) || (data.status is string && (data.status == 'sent' || data.status == 'delivered' || data.status == 'seen')));
+    }
+    
+    function isParticipant(chatId) {
+      let path = /databases/$(database)/documents/chats/$(chatId);
+      return isAuthenticated() && 
+             exists(path) &&
+             request.auth.uid in get(path).data.participants;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    
+    match /users/{userId} {
+      // Anyone authenticated can read user profiles to start chats
+      allow read: if isAuthenticated();
+      
+      // Only the user can create/update their own profile
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) &&
+                    request.resource.data.uid == resource.data.uid &&
+                    request.resource.data.createdAt == resource.data.createdAt;
+    }
+    
+    match /chats/{chatId} {
+      // A user can read a chat if they are in the participants list
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
+      
+      // A user can create a chat if they include themselves in the participants
+      allow create: if isAuthenticated() && isValidChat(request.resource.data);
+      
+      // A user can update a chat (e.g., lastMessage) if they are a participant
+      allow update: if isAuthenticated() && 
+                    request.auth.uid in resource.data.participants &&
+                    isValidChat(request.resource.data) &&
+                    request.resource.data.createdAt == resource.data.createdAt;
+      
+      match /messages/{messageId} {
+        // A user can read messages if they are a participant in the parent chat
+        allow read: if isParticipant(chatId);
+        
+        // A user can send a message if they are a participant in the parent chat
+        allow create: if isParticipant(chatId) && 
+                      isValidMessage(request.resource.data);
+                      
+        // Allow updating message status (e.g., marking as seen)
+        // OR allow the sender to delete the message
+        allow update: if isParticipant(chatId) && 
+                      (
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) ||
+                        (
+                          resource.data.senderId == request.auth.uid &&
+                          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'imageUrl', 'isDeleted']) &&
+                          request.resource.data.isDeleted == true &&
+                          request.resource.data.text == 'This message was deleted' &&
+                          !('imageUrl' in request.resource.data)
+                        )
+                      );
+                      
+        allow delete: if false;
+      }
+
+      match /typing/{userId} {
+        // A user can read typing status if they are a participant in the parent chat
+        allow read: if isParticipant(chatId);
+        
+        // A user can update their own typing status if they are a participant in the parent chat
+        allow create, update: if isParticipant(chatId) && 
+                              request.auth.uid == userId &&
+                              request.resource.data.keys().hasAll(['isTyping', 'updatedAt']) &&
+                              request.resource.data.isTyping is bool &&
+                              request.resource.data.updatedAt is timestamp;
+        
+        allow delete: if isAuthenticated() && request.auth.uid == userId;
+      }
+    }
+    match /calls/{callId} {
+      // Allow reading if the user is a participant (caller or callee)
+      // This supports collection-wide queries where calleeId == uid
+      allow read: if isAuthenticated() && 
+                    (request.auth.uid == resource.data.callerId || request.auth.uid == resource.data.calleeId);
+      
+      // Allow creating if the user is the caller
+      allow create: if isAuthenticated() && 
+                      request.auth.uid == request.resource.data.callerId &&
+                      request.resource.data.status == 'ringing';
+      
+      // Allow updating if the user is a participant
+      allow update: if isAuthenticated() && 
+                      (request.auth.uid == resource.data.callerId || request.auth.uid == resource.data.calleeId);
+      
+      allow delete: if isAuthenticated() && 
+                      (request.auth.uid == resource.data.callerId || request.auth.uid == resource.data.calleeId);
+
+      match /{document=**} {
+        allow read, write: if isAuthenticated() && 
+                           (request.auth.uid == get(/databases/$(database)/documents/calls/$(callId)).data.callerId || 
+                            request.auth.uid == get(/databases/$(database)/documents/calls/$(callId)).data.calleeId);
+      }
+    }
+  }
+}
