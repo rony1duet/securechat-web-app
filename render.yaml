@@ -1,0 +1,13 @@
+services:
+  - type: static
+    name: securechat-web-app
+    rootDir: .
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
